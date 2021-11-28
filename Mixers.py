@@ -25,8 +25,8 @@ class Distribution:
     def __init__(self, m):
         self.dist = m / m.sum()
 
-    def __eq__(self, other):
-        return self.dist == other.dist
+    def __eq__(self, other, tolerance=1e-10):
+        return np.allclose(self.dist, other.dist, rtol=tolerance, atol=tolerance)
 
     def update(self, tensor):
         s, u, d, l, r = tensor.tt * self.dist
@@ -43,7 +43,7 @@ class TransitionTensor:
 
     @classmethod
     def div_free(cls, tt):
-        dim = tt.shape()
+        dim = tt.shape
         in_flow = tt[0] + sum([shift(i, j) for i, j in zip(tt[1:], ['u', 'd', 'l', 'r'])])
 
         return np.allclose(in_flow, np.ones(dim), rtol=1e-10, atol=1e-10)
@@ -75,6 +75,9 @@ class RandomTensor(TransitionTensor):
         tt = np.block([[[np.ones([d, d])]], [[tt / tt.sum(0)]]])
         super().__init__(tt)
 
+    def __str__(self):
+        return 'RandomTensor'
+
 
 # Lazy Random Walk
 class LazyRandomWalk(TransitionTensor):
@@ -93,6 +96,9 @@ class LazyRandomWalk(TransitionTensor):
         tt[0, :, -1] += 1
 
         super().__init__(tt)
+
+    def __str__(self):
+        return 'LazyRandomWalk'
 
 
 # Simple Swirl: you stay in your lane with a lazy component
@@ -123,10 +129,13 @@ class SimpleSwirl(TransitionTensor):
 
         super().__init__(tt)
 
+    def __str__(self):
+        return 'SimpleSwirl'
+
 
 # Diffusion Swirl: you can change lanes
 class DiffusionSwirl(TransitionTensor):
-
+    
     def __init__(self, d):
         diff = 1 / d  # should it be a parameter?
 
@@ -206,3 +215,7 @@ class DiffusionSwirl(TransitionTensor):
                     tt[3, i, j] += diff
 
         super().__init__(tt)
+
+    def __str__(self):
+        return 'DiffusionSwirl'
+
