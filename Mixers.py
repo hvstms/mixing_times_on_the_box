@@ -61,27 +61,54 @@ class TransitionTensor:  # Parent for all random mixing strategies on the grid
 
 class RandomTensor(TransitionTensor):  # iid environment
 
-    def __init__(self, d):
-        tt = np.random.random([4, d, d])
+    def __init__(self, n):
+        tt = np.random.random([4, n, n])
 
         # removing leaks
         tt[0, 0, :] = 0
-        tt[1, d - 1, :] = 0
+        tt[1, n - 1, :] = 0
         tt[2, :, 0] = 0
-        tt[3, :, d - 1] = 0
+        tt[3, :, n - 1] = 0
 
         # creating the tensor with 1/2 laziness
-        tt = np.block([[[np.ones([d, d])]], [[tt / tt.sum(0)]]])
+        tt = np.block([[[np.ones([n, n])]], [[tt / tt.sum(0)]]])
         super().__init__(tt)
 
     def __str__(self):
         return 'RandomTensor'
 
 
+class UpwardDrift(TransitionTensor):  # iid environment
+
+    def __init__(self, n, diff=0, t='UpwardDrift'):
+        self.type = t
+
+        flow = .5 - diff  # amount of the flow on the edge
+        tt = np.block([[[.5 * np.ones([n, n])]],
+                      [[flow * np.ones([n, n])]],
+                      [[np.zeros([n, n])]],
+                      [[diff * np.ones([n, n])]],
+                      [[diff * np.ones([n, n])]]])
+
+        tt[1, :, 1:-1] -= diff
+        tt[0, 0, :] += flow
+        tt[0, 0, 1:-1] -= diff
+
+        # removing leaks
+        tt[1, 0, :] = 0
+        tt[3, :, 0] = 0
+        tt[4, :, n - 1] = 0
+
+        super().__init__(tt)
+
+    def __str__(self):
+        return self.type
+
+
 class LazyRandomWalk(TransitionTensor):
 
-    def __init__(self, d):
-        tt = np.block([[[4 * np.ones([d, d])]], [[np.ones([4, d, d])]]])
+    def __init__(self, n):
+        tt = np.block([[[4 * np.ones([n, n])]], [[np.ones([4, n, n])]]])
 
         # removing leaks
         tt[1, 0] -= 1
@@ -101,101 +128,45 @@ class LazyRandomWalk(TransitionTensor):
         return 'LazyRandomWalk'
 
 
-class SimpleSwirl(TransitionTensor):  # distance from center is constant and there is a lazy component
+class Swirl(TransitionTensor):
 
-    def __init__(self, n):
-        up = np.zeros([n, n])
-        for i in range(n):
-            for j in range(n):
-                if j >= i > n - j - 1:
-                    up[i, j] += .5
+    def __init__(self, n, flow_rev=0, diff=0, t='Swirl'):
+        self.type = t
 
-        # the rest comes from rotational symmetry
-        left = np.rot90(up)
-        down = np.rot90(left)
-        right = np.rot90(down)
+        flow = .5 - flow_rev - 2 * diff
 
-        # ensemble
-        tt = np.block([[[.5 * np.ones([n, n])]], [[up]], [[down]], [[left]], [[right]]])
-        super().__init__(tt)
-
-    def __str__(self):
-        return 'SimpleSwirl'
-
-
-class DiffusionSwirl(TransitionTensor):  # same as the SimpleSwirl with diffusion to the side
-
-    def __init__(self, n):
-        diff = 1 / n  # should it be a parameter?
-
-        # laziness
+        # === laziness === #
         stay = .5 * np.ones([n, n])
         stay[[0, 0, n - 1, n - 1], [0, n - 1, 0, n - 1]] += diff
         if n % 2 == 1:
             stay[n // 2, n // 2] += .5 - 4 * diff
 
-        # upstream
+        # === upstream === #
         up = np.zeros([n - 1, n - 2])
         for i in range((n - 1) // 2):
             for j in range(n - 2):
                 if i > n - 3 - j:
-                    up[i, j] = .5 - 2 * diff
+                    up[i, j] = flow
                 elif i <= j < n - 2 - i:
                     up[i, j] = diff
+                else:
+                    up[i, j] = flow_rev
 
         up += np.flipud(up)
         if n % 2 == 0:
-            up[n // 2 - 1, n // 2 - 1:] = .5 - 2 * diff
-        up = np.block([[np.zeros([n - 1, 1]), up, (.5 - diff) * np.ones([n - 1, 1])]])
+            up[n // 2 - 1, n // 2 - 1:] = flow
+            up[n // 2 - 1, :n // 2 - 1] = flow_rev
+        up = np.block([[flow_rev * np.ones([n - 1, 1]), up, (flow + diff) * np.ones([n - 1, 1])]])
         up = np.block([[np.zeros(n)], [up]])
 
-        # the rest comes from rotational symmetry
+        # === left-, right- and downstream === #
         left = np.rot90(up)
         down = np.rot90(left)
         right = np.rot90(down)
 
-        # ensemble
+        # === ensemble === #
         tt = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]])
         super().__init__(tt)
 
     def __str__(self):
-        return 'DiffusionSwirl'
-
-
-class DiffusionSwirl(TransitionTensor):  # same as the SimpleSwirl with diffusion to the side
-
-    def __init__(self, n, ):
-        diff = 1 / n  # should it be a parameter?
-
-        # laziness
-        stay = .5 * np.ones([n, n])
-        stay[[0, 0, n - 1, n - 1], [0, n - 1, 0, n - 1]] += diff
-        if n % 2 == 1:
-            stay[n // 2, n // 2] += .5 - 4 * diff
-
-        # upstream
-        up = np.zeros([n - 1, n - 2])
-        for i in range((n - 1) // 2):
-            for j in range(n - 2):
-                if i > n - 3 - j:
-                    up[i, j] = .5 - 2 * diff
-                elif i <= j < n - 2 - i:
-                    up[i, j] = diff
-
-        up += np.flipud(up)
-        if n % 2 == 0:
-            up[n // 2 - 1, n // 2 - 1:] = .5 - 2 * diff
-        up = np.block([[np.zeros([n - 1, 1]), up, (.5 - diff) * np.ones([n - 1, 1])]])
-        up = np.block([[np.zeros(n)], [up]])
-
-        # the rest comes from rotational symmetry
-        left = np.rot90(up)
-        down = np.rot90(left)
-        right = np.rot90(down)
-
-        # ensemble
-        tt = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]])
-        super().__init__(tt)
-
-    def __str__(self):
-        return 'DiffusionSwirl'
+        return self.type
