@@ -50,13 +50,13 @@ class TransitionTensor:  # Parent for all random mixing strategies on the grid
         return np.allclose(in_flow, np.ones(dim), rtol=1e-10, atol=1e-10)
 
     def __init__(self, tt):
+        if self.leak(tt) > 0:
+            raise ValueError('The transition matrix has leaks')
+        if not self.div_free(tt):
+            warnings.warn('Your transition tensor in not divergence free', Warning)
+
         self.tt = tt
         self.tt /= tt.sum(0)
-
-        if self.leak(self.tt) > 0:
-            raise ValueError('The transition matrix has leaks')
-        if not self.div_free(self.tt):
-            warnings.warn('Your transition tensor in not divergence free', Warning)
 
 
 class RandomTensor(TransitionTensor):  # iid environment
@@ -66,9 +66,9 @@ class RandomTensor(TransitionTensor):  # iid environment
 
         # removing leaks
         tt[0, 0, :] = 0
-        tt[1, n - 1, :] = 0
+        tt[1, -1, :] = 0
         tt[2, :, 0] = 0
-        tt[3, :, n - 1] = 0
+        tt[3, :, -1] = 0
 
         # creating the tensor with 1/2 laziness
         tt = np.block([[[np.ones([n, n])]], [[tt / tt.sum(0)]]])
@@ -85,10 +85,10 @@ class UpwardDrift(TransitionTensor):  # iid environment
 
         flow = .5 - diff  # amount of the flow on the edge
         tt = np.block([[[.5 * np.ones([n, n])]],
-                      [[flow * np.ones([n, n])]],
-                      [[np.zeros([n, n])]],
-                      [[diff * np.ones([n, n])]],
-                      [[diff * np.ones([n, n])]]])
+                       [[flow * np.ones([n, n])]],
+                       [[np.zeros([n, n])]],
+                       [[diff * np.ones([n, n])]],
+                       [[diff * np.ones([n, n])]]])
 
         tt[1, :, 1:-1] -= diff
         tt[0, 0, :] += flow
@@ -97,7 +97,7 @@ class UpwardDrift(TransitionTensor):  # iid environment
         # removing leaks
         tt[1, 0, :] = 0
         tt[3, :, 0] = 0
-        tt[4, :, n - 1] = 0
+        tt[4, :, -1] = 0
 
         super().__init__(tt)
 
@@ -137,7 +137,7 @@ class Swirl(TransitionTensor):
 
         # === laziness === #
         stay = .5 * np.ones([n, n])
-        stay[[0, 0, n - 1, n - 1], [0, n - 1, 0, n - 1]] += diff
+        stay[[0, 0, -1, -1], [0, -1, 0, -1]] += diff
         if n % 2 == 1:
             stay[n // 2, n // 2] += .5 - 4 * diff
 
@@ -163,6 +163,71 @@ class Swirl(TransitionTensor):
         left = np.rot90(up)
         down = np.rot90(left)
         right = np.rot90(down)
+
+        # === ensemble === #
+        tt = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]])
+        super().__init__(tt)
+
+    def __str__(self):
+        return self.type
+
+
+class BalazsFlow(TransitionTensor):
+
+    def __init__(self, depth=1, diff=0):
+        self.type = ['BalazsFlow', 'BalazsFlowWithDiffusion'][diff != 0]
+
+        flow = .5 - 2 * diff
+
+        # === upstream === #
+        def recursion(d):
+            if d == 0:
+                return np.empty([0, 0])
+
+            temp = recursion(d-1)
+            temp = np.block([[temp, temp], [temp, temp]])
+            n = temp.shape[0]
+
+            temp = np.block([[temp], [diff * np.ones([1, n])]])
+            if d % 2 == 1:
+                return np.block([[diff * np.ones([1, n+2])], [flow * np.ones([n+1, 1]), temp, np.zeros([n+1, 1])]])
+            else:
+                return np.block([[diff * np.ones([1, n+2])], [np.zeros([n+1, 1]), temp, flow * np.ones([n+1, 1])]])
+
+        """
+        def recursion(d):
+            if d == 0:
+                return diff * np.ones([1, 1])
+
+            prev = recursion(d - 1)
+            n = 2 * prev.shape[0]
+
+            curr = np.zeros([n+2, n+2])
+            curr[0, :] = diff
+            curr[-1, 1:-1] = diff
+            if d % 2 == 1:
+                curr[1:, 0] = flow
+            else:
+                curr[1:, -1] = flow
+            curr[1:-1,1:-1] = np.block([[prev, prev], [prev, prev]])
+
+            return curr
+        """
+
+        up = recursion(depth)
+        up[0, :] = 0
+        idx = [0, 1][depth % 2 == 1]
+        up[1:, idx] += diff
+
+        # === left-, right- and downstream === #
+        left = np.rot90(up)
+        down = np.rot90(left)
+        right = np.rot90(down)
+
+        # === laziness === #
+        n, _ = up.shape
+        stay = .5 * np.ones([n, n])
+        stay[[0, 0, -1, -1], [0, -1, 0, -1]] += diff
 
         # === ensemble === #
         tt = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]])
