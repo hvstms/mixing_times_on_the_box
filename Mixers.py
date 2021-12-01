@@ -130,34 +130,34 @@ class LazyRandomWalk(TransitionTensor):
 
 class Swirl(TransitionTensor):
 
-    def __init__(self, n, flow_rev=0, diff=0, t='Swirl'):
-        self.type = t
+    def __init__(self, depth=1, flow_rev=0, diff=0, alternating=True):
+        self.type = ['', 'Alternating'][alternating] + 'Swirl' + ['', 'WithDiffusion'][diff != 0]
 
         flow = .5 - flow_rev - 2 * diff
 
         # === laziness === #
-        stay = .5 * np.ones([n, n])
+        stay = .5 * np.ones([2 * depth] * 2)
         stay[[0, 0, -1, -1], [0, -1, 0, -1]] += diff
-        if n % 2 == 1:
-            stay[n // 2, n // 2] += .5 - 4 * diff
 
         # === upstream === #
-        up = np.zeros([n - 1, n - 2])
-        for i in range((n - 1) // 2):
-            for j in range(n - 2):
-                if i > n - 3 - j:
-                    up[i, j] = flow
-                elif i <= j < n - 2 - i:
-                    up[i, j] = diff
-                else:
-                    up[i, j] = flow_rev
+        def recursion(d):
+            if d == 0:
+                return np.empty([0, 0])
 
-        up += np.flipud(up)
-        if n % 2 == 0:
-            up[n // 2 - 1, n // 2 - 1:] = flow
-            up[n // 2 - 1, :n // 2 - 1] = flow_rev
-        up = np.block([[flow_rev * np.ones([n - 1, 1]), up, (flow + diff) * np.ones([n - 1, 1])]])
-        up = np.block([[np.zeros(n)], [up]])
+            prev = recursion(d - 1)
+            n = prev.shape[0]
+
+            curr = np.block([[prev], [diff * np.ones([1, n])]])
+            curr = np.block([[diff * np.ones([1, n + 2])], [np.zeros([n + 1, 1]), curr, np.zeros([n + 1, 1])]])
+            i = [0, -1][d % 2 != 1 and alternating]
+            curr[1:, i] = flow
+
+            return curr
+
+        up = recursion(depth)
+        up[0, :] = 0
+        idx = [0, -1][depth % 2 != 1 and alternating]
+        up[1:, idx] += diff
 
         # === left-, right- and downstream === #
         left = np.rot90(up)
@@ -174,49 +174,33 @@ class Swirl(TransitionTensor):
 
 class BalazsFlow(TransitionTensor):
 
-    def __init__(self, depth=1, diff=0):
-        self.type = ['BalazsFlow', 'BalazsFlowWithDiffusion'][diff != 0]
+    def __init__(self, depth=1, diff=0, alternating=True):
+        self.type = ['', 'Alternating'][alternating] + 'BalazsFlow' + ['', 'WithDiffusion'][diff != 0]
 
         flow = .5 - 2 * diff
+
+        # === laziness === #
+        stay = .5 * np.ones([2 ** (depth + 1) - 2] * 2)
+        stay[[0, 0, -1, -1], [0, -1, 0, -1]] += diff
 
         # === upstream === #
         def recursion(d):
             if d == 0:
                 return np.empty([0, 0])
 
-            temp = recursion(d-1)
-            temp = np.block([[temp, temp], [temp, temp]])
-            n = temp.shape[0]
-
-            temp = np.block([[temp], [diff * np.ones([1, n])]])
-            if d % 2 == 1:
-                return np.block([[diff * np.ones([1, n+2])], [flow * np.ones([n+1, 1]), temp, np.zeros([n+1, 1])]])
-            else:
-                return np.block([[diff * np.ones([1, n+2])], [np.zeros([n+1, 1]), temp, flow * np.ones([n+1, 1])]])
-
-        """
-        def recursion(d):
-            if d == 0:
-                return diff * np.ones([1, 1])
-
             prev = recursion(d - 1)
             n = 2 * prev.shape[0]
 
-            curr = np.zeros([n+2, n+2])
-            curr[0, :] = diff
-            curr[-1, 1:-1] = diff
-            if d % 2 == 1:
-                curr[1:, 0] = flow
-            else:
-                curr[1:, -1] = flow
-            curr[1:-1,1:-1] = np.block([[prev, prev], [prev, prev]])
+            curr = np.block([[prev, prev], [prev, prev], [diff * np.ones([1, n])]])
+            curr = np.block([[diff * np.ones([1, n + 2])], [np.zeros([n + 1, 1]), curr, np.zeros([n + 1, 1])]])
+            i = [0, -1][d % 2 != 1 and alternating]
+            curr[1:, i] = flow
 
             return curr
-        """
 
         up = recursion(depth)
         up[0, :] = 0
-        idx = [0, 1][depth % 2 == 1]
+        idx = [0, -1][depth % 2 != 1 and alternating]
         up[1:, idx] += diff
 
         # === left-, right- and downstream === #
@@ -224,14 +208,15 @@ class BalazsFlow(TransitionTensor):
         down = np.rot90(left)
         right = np.rot90(down)
 
-        # === laziness === #
-        n, _ = up.shape
-        stay = .5 * np.ones([n, n])
-        stay[[0, 0, -1, -1], [0, -1, 0, -1]] += diff
-
         # === ensemble === #
         tt = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]])
         super().__init__(tt)
 
     def __str__(self):
         return self.type
+
+
+class TamasFlow(TransitionTensor):
+
+    def __init__(self, tt):
+        super().__init__(tt)
