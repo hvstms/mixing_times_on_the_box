@@ -1,10 +1,14 @@
+from syslog import syslog
+
 import numpy as np
 import warnings
+# from abc import ABC, abstractmethod
 
 
 # ================= #
 # === Functions === #
 # ================= #
+
 
 def shift(matrix, direction):  # Shifting the entries of matrices by concatenating a 0 row/column
     n = matrix.shape[0]
@@ -25,14 +29,25 @@ def shift(matrix, direction):  # Shifting the entries of matrices by concatenati
 class Distribution:  # A single distribution on the n by n grid
 
     def __init__(self, m):
-        self.dist = m / m.sum()
+        self.d = m / m.sum()
 
     def __eq__(self, other, tolerance=1e-10):
-        return np.allclose(self.dist, other.dist, rtol=tolerance, atol=tolerance)
+        return np.allclose(self.d, other.d, rtol=tolerance, atol=tolerance)
+
+    def __sub__(self, other):
+        return Distribution(self.d - other.d)
 
     def update(self, tensor):
-        s, u, d, l, r = tensor.tt * self.dist
-        self.dist = s + shift(u, 'u') + shift(d, 'd') + shift(l, 'l') + shift(r, 'r')
+        s, u, d, l, r = tensor.tt * self.d
+        self.d = s + shift(u, 'u') + shift(d, 'd') + shift(l, 'l') + shift(r, 'r')
+
+
+class DegenerateDistribution(Distribution):
+    def __init__(self, n, i, j):
+        d = np.zeros([n, n])
+        d[i, j] = 1
+
+        super().__init__(d)
 
 
 class TransitionTensor:  # Parent for all random mixing strategies on the grid
@@ -44,8 +59,10 @@ class TransitionTensor:  # Parent for all random mixing strategies on the grid
 
     @classmethod
     def div_free(cls, tt):  # testing if the tensor is divergence free
-        dim = tt.shape
+        dim = tt.shape[1:]
         in_flow = tt[0] + sum([shift(i, j) for i, j in zip(tt[1:], ['u', 'd', 'l', 'r'])])
+
+        syslog('asd')
 
         return np.allclose(in_flow, np.ones(dim), rtol=1e-10, atol=1e-10)
 
@@ -58,8 +75,25 @@ class TransitionTensor:  # Parent for all random mixing strategies on the grid
         self.tt = tt
         self.tt /= tt.sum(0)
 
+    """
+    @abstractmethod
+    def stationary_dist(self):
+        pass
+    """
 
-class RandomTensor(TransitionTensor):  # iid environment
+
+class SymmetricTensor(TransitionTensor):
+    def __init__(self, tt):
+        super().__init__(tt)
+
+    def stationary_dist(self):
+        return Distribution(np.ones(self.tt.shape))
+
+    def distance_from_stationarity(self, dist):
+        return np.abs(self.stationary_dist() - dist.d).sum() * .5
+
+
+class RandomEnvironment(TransitionTensor):  # iid environment
 
     def __init__(self, n):
         tt = np.random.random([4, n, n])
@@ -105,7 +139,7 @@ class UpwardDrift(TransitionTensor):  # iid environment
         return self.type
 
 
-class LazyRandomWalk(TransitionTensor):
+class LazyRandomWalk(SymmetricTensor):
 
     def __init__(self, n):
         tt = np.block([[[4 * np.ones([n, n])]], [[np.ones([4, n, n])]]])
@@ -128,7 +162,7 @@ class LazyRandomWalk(TransitionTensor):
         return 'LazyRandomWalk'
 
 
-class Swirl(TransitionTensor):
+class Swirl(SymmetricTensor):
 
     def __init__(self, depth=1, flow_rev=0, diff=0, alternating=True):
         self.type = ['', 'Alternating'][alternating] + 'Swirl' + ['', 'WithDiffusion'][diff != 0]
@@ -172,7 +206,7 @@ class Swirl(TransitionTensor):
         return self.type
 
 
-class BalazsFlow(TransitionTensor):
+class BalazsFlow(SymmetricTensor):
 
     def __init__(self, depth=1, diff=0, alternating=True):
         self.type = ['', 'Alternating'][alternating] + 'BalazsFlow' + ['', 'WithDiffusion'][diff != 0]
@@ -216,7 +250,7 @@ class BalazsFlow(TransitionTensor):
         return self.type
 
 
-class TamasFlow(TransitionTensor):
+class TamasFlow(SymmetricTensor):
 
-    def __init__(self, tt):
+    def __init__(self, tt, alternating=True):
         super().__init__(tt)
