@@ -1,101 +1,128 @@
-from syslog import syslog
-
-import numpy as np
 import warnings
-# from abc import ABC, abstractmethod
+# from syslog import syslog
+
+from abc import abstractmethod
+
+import numpy
+import numpy as np
+
+import matplotlib.pyplot as plt
 
 
 # ================= #
 # === Functions === #
 # ================= #
 
-
 def shift(matrix, direction):  # Shifting the entries of matrices by concatenating a 0 row/column
     n = matrix.shape[0]
     if direction == 'u':
         return np.block([[matrix[1:, :]], [np.zeros([1, n])]])
-    if direction == 'd':
+    elif direction == 'd':
         return np.block([[np.zeros([1, n])], [matrix[:-1, :]]])
-    if direction == 'l':
+    elif direction == 'l':
         return np.block([[matrix[:, 1:], np.zeros([n, 1])]])
-    if direction == 'r':
+    elif direction == 'r':
         return np.block([[np.zeros([n, 1]), matrix[:, :-1]]])
+    else:
+        raise ValueError("The direction must be: 'u', 'd', 'l' or 'r'.")
 
 
 # =============== #
 # === Classes === #
 # =============== #
 
-class Distribution:  # A single distribution on the n by n grid
+class Distribution(numpy.ndarray):  # A single distribution on the n by n grid
 
-    def __init__(self, m):
-        self.d = m / m.sum()
+    def __new__(cls, arg):
+        if type(arg) == int:
+            self = numpy.zeros(shape=(arg, arg)).view(cls)
+        elif type(arg) == numpy.ndarray:
+            self = (arg / arg.sum()).view(cls)
+        else:
+            raise ValueError('The input must be int or numpy.ndarray.')
+
+        return self
 
     def __eq__(self, other, tolerance=1e-10):
-        return np.allclose(self.d, other.d, rtol=tolerance, atol=tolerance)
-
-    def __sub__(self, other):
-        return Distribution(self.d - other.d)
+        return np.allclose(self, other, rtol=tolerance, atol=tolerance)
 
     def update(self, tensor):
-        s, u, d, l, r = tensor.tt * self.d
-        self.d = s + shift(u, 'u') + shift(d, 'd') + shift(l, 'l') + shift(r, 'r')
+        s, u, d, l, r = tensor * self
+        self[:] = s + shift(u, 'u') + shift(d, 'd') + shift(l, 'l') + shift(r, 'r')
+
+    def distance_from_stationarity(self, tensor):
+        return np.abs(tensor.stationary_dist() - self).sum() * .5
+
+    def snap(self, mode='show', file='dummy', dpi=250):
+        plt.figure(dpi=dpi)
+        plt.axis('off')
+        plt.imshow(self)
+        if mode == 'show':
+            plt.show()
+        elif mode == 'save':
+            plt.savefig(f'{file}.png', bbox_inches='tight')
+            plt.close()
 
 
-class DegenerateDistribution(Distribution):
-    def __init__(self, n, i, j):
-        d = np.zeros([n, n])
-        d[i, j] = 1
+class DTensor(numpy.ndarray):
 
-        super().__init__(d)
+    def __new__(cls, arg):
+        if type(arg) == int:
+            self = numpy.ndarray(shape=(5, arg, arg)).view(cls)
+        elif type(arg) == numpy.ndarray:
+            self = arg.view(cls)
+        else:
+            raise ValueError('The input must be int or numpy.ndarray')
+
+        return self
+
+    def transpose(self):
+        s, u, d, l, r = self
+        return np.block([[[s]], [[shift(d, 'd')]], [[shift(u, 'u')]], [[shift(r, 'r')]], [[shift(l, 'l')]]])
+
+    def show(self, idcs=range(5), fixed_range=None):
+        fig, axs = plt.subplots(1, len(idcs))
+        [ax.axis('off') for ax in axs]
+        if fixed_range is None:
+            [axs[i].imshow(self[idcs[i]]) for i in range(len(idcs))]
+        else:
+            [axs[i].imshow(self[idcs[i]], vmin=fixed_range[0], vmax=fixed_range[1]) for i in range(len(idcs))]
+        plt.show()
 
 
-class TransitionTensor:  # Parent for all random mixing strategies on the grid
+class TransitionDTensor(DTensor):  # Parent for all random mixing strategies on the grid
 
     @classmethod
-    def leak(cls, tt):  # gives back the total leakage
+    def leak(cls, tt):
         s, u, d, l, r = tt
         return u[:1, :].sum() + d[-1:, :].sum() + l[:, :1].sum() + r[:, -1:].sum()
 
     @classmethod
-    def div_free(cls, tt):  # testing if the tensor is divergence free
+    def div_free(cls, tt):
         dim = tt.shape[1:]
-        in_flow = tt[0] + sum([shift(i, j) for i, j in zip(tt[1:], ['u', 'd', 'l', 'r'])])
+        in_flow = tt[0] + shift(tt[1], 'u') + shift(tt[2], 'd') + shift(tt[3], 'l') + shift(tt[4], 'r')
 
-        syslog('asd')
+        return in_flow.view(Distribution) == np.ones(dim).view(Distribution)
 
-        return np.allclose(in_flow, np.ones(dim), rtol=1e-10, atol=1e-10)
+    def __new__(cls, tt):
+        tt /= tt.sum(0)
 
-    def __init__(self, tt):
-        if self.leak(tt) > 0:
+        if cls.leak(tt) > 0:
             raise ValueError('The transition matrix has leaks')
-        if not self.div_free(tt):
-            warnings.warn('Your transition tensor in not divergence free', Warning)
+        if not cls.div_free(tt):
+            warnings.warn('Your transition tensor is not divergence free', Warning)
 
-        self.tt = tt
-        self.tt /= tt.sum(0)
+        self = tt.view(cls)
+        return self
 
-    """
     @abstractmethod
     def stationary_dist(self):
         pass
-    """
 
 
-class SymmetricTensor(TransitionTensor):
-    def __init__(self, tt):
-        super().__init__(tt)
+class RandomEnvironment(TransitionDTensor):  # iid environment
 
-    def stationary_dist(self):
-        return Distribution(np.ones(self.tt.shape))
-
-    def distance_from_stationarity(self, dist):
-        return np.abs(self.stationary_dist() - dist.d).sum() * .5
-
-
-class RandomEnvironment(TransitionTensor):  # iid environment
-
-    def __init__(self, n):
+    def __new__(cls, n):
         tt = np.random.random([4, n, n])
 
         # removing leaks
@@ -105,18 +132,19 @@ class RandomEnvironment(TransitionTensor):  # iid environment
         tt[3, :, -1] = 0
 
         # creating the tensor with 1/2 laziness
-        tt = np.block([[[np.ones([n, n])]], [[tt / tt.sum(0)]]])
-        super().__init__(tt)
+        tt = np.block([[[np.ones([n, n])]], [[tt / tt.sum(0)]]]) / 2
 
-    def __str__(self):
-        return 'RandomTensor'
+        self = tt.view(cls)
+        return self
+
+    def stationary_dist(self):
+        raise NotImplementedError('This is a hard calculation and would, hence we did not bother with the '
+                                  'implementation')
 
 
-class UpwardDrift(TransitionTensor):  # iid environment
+class UpwardDrift(TransitionDTensor):  # iid environment
 
-    def __init__(self, n, diff=0, t='UpwardDrift'):
-        self.type = t
-
+    def __new__(cls, n, diff=0):
         flow = .5 - diff  # amount of the flow on the edge
         tt = np.block([[[.5 * np.ones([n, n])]],
                        [[flow * np.ones([n, n])]],
@@ -133,15 +161,39 @@ class UpwardDrift(TransitionTensor):  # iid environment
         tt[3, :, 0] = 0
         tt[4, :, -1] = 0
 
-        super().__init__(tt)
+        self = tt.view(cls)
+        return self
 
-    def __str__(self):
-        return self.type
+    def stationary_dist(self):
+        dim = self.shape[1]
+
+        d = np.block([[np.ones(dim) / dim], [np.zeros([dim - 1, dim])]])
+        return Distribution(d)
 
 
-class LazyRandomWalk(SymmetricTensor):
+class DivFreeDTensor(TransitionDTensor):
 
-    def __init__(self, n):
+    def __new__(cls, tt):
+        self = np.asarray(tt).view(cls)
+        return self
+
+    def stationary_dist(self):
+        return Distribution(np.ones(self.shape[1:]))
+
+    def helmholtz(self):
+        transposed = self.transpose()
+
+        sym = (self + transposed) / 2
+        anti = (self - transposed) / 2
+        return sym, anti
+
+    def terrain(self):
+        anti = (self - self.transpose()) / 2
+
+
+class LazyRandomWalk(DivFreeDTensor):
+
+    def __new__(cls, n):
         tt = np.block([[[4 * np.ones([n, n])]], [[np.ones([4, n, n])]]])
 
         # removing leaks
@@ -156,17 +208,13 @@ class LazyRandomWalk(SymmetricTensor):
         tt[0, :, 0] += 1
         tt[0, :, -1] += 1
 
-        super().__init__(tt)
-
-    def __str__(self):
-        return 'LazyRandomWalk'
+        self = (tt / tt.sum(axis=0)).view(cls)
+        return self
 
 
-class Swirl(SymmetricTensor):
+class Swirl(DivFreeDTensor):
 
-    def __init__(self, depth=1, flow_rev=0, diff=0, alternating=True):
-        self.type = ['', 'Alternating'][alternating] + 'Swirl' + ['', 'WithDiffusion'][diff != 0]
-
+    def __new__(cls, depth, diff=.125, alternating=True, flow_rev=0):
         flow = .5 - flow_rev - 2 * diff
 
         # === laziness === #
@@ -199,18 +247,13 @@ class Swirl(SymmetricTensor):
         right = np.rot90(down)
 
         # === ensemble === #
-        tt = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]])
-        super().__init__(tt)
-
-    def __str__(self):
-        return self.type
+        self = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]]).view(cls)
+        return self
 
 
-class BalazsFlow(SymmetricTensor):
+class BalazsFlow(DivFreeDTensor):
 
-    def __init__(self, depth=1, diff=0, alternating=True):
-        self.type = ['', 'Alternating'][alternating] + 'BalazsFlow' + ['', 'WithDiffusion'][diff != 0]
-
+    def __new__(cls, depth, diff=.125, alternating=True):
         flow = .5 - 2 * diff
 
         # === laziness === #
@@ -243,14 +286,11 @@ class BalazsFlow(SymmetricTensor):
         right = np.rot90(down)
 
         # === ensemble === #
-        tt = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]])
-        super().__init__(tt)
-
-    def __str__(self):
-        return self.type
+        self = np.block([[[stay]], [[up]], [[down]], [[left]], [[right]]]).view(cls)
+        return self
 
 
-class TamasFlow(SymmetricTensor):
+class TamasFlow(DivFreeDTensor):
 
     def __init__(self, tt, alternating=True):
         super().__init__(tt)
