@@ -1,2 +1,4 @@
-# mixing_times
-[on-going] We are to analize the mixing strategies on the n by n grid.
+# Cumputing mixing times on the $n \times n$ lattice.
+
+These are the codes we used to simulate mixing times of particular Markov chains.
+For more information on the main topic see my thesis.
